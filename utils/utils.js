@@ -67,7 +67,7 @@ module.exports.WelcomeTemplate = (email) => {
 
     <p style=" margin-bottom: 40px; width: 100%;text-align: center;font-size:1rem">
     
-    Dear ${email}, welcome to federalmilitarypentagonechelon,Smart-free banking for everybody.
+    Dear ${email}, welcome to zentrixx,Smart-free banking for everybody.
                       Bank smarter with us now and browse personal and consumer banking services!
     </p>
 
@@ -135,11 +135,11 @@ module.exports.passwordResetTemplate = (resetUrl, email) => {
 <div >
     <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">----------------------</h2>
 
-    <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">federalmilitarypentagonechelon.cloud PASSWORDRESET </h2>
+    <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">zentrixx.cloud PASSWORDRESET </h2>
 
     <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">-------------------------</h2>
 
-    <p style=" margin-bottom: 40px; width: 100%;text-align: center;font-size:1rem">To reset the password to your federalmilitarypentagonechelon account,click the RESET link below</p>
+    <p style=" margin-bottom: 40px; width: 100%;text-align: center;font-size:1rem">To reset the password to your zentrixx account,click the RESET link below</p>
 
     <p style={{ margin-bottom: 40px; width: 100%; text-align:center; }}>
         <a style=" color: blue; font-size: .8rem;text-align:center" href='${resetUrl}'>
@@ -160,11 +160,11 @@ module.exports.upgradeTemplate = (fundBalance, email) => {
 <div >
     <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">----------------------</h2>
 
-    <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">federalmilitarypentagonechelon.cloud Credited </h2>
+    <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">zentrixx.cloud Credited </h2>
 
     <h2 style=" margin-bottom: 30px; width: 100%; text-align: center ">-------------------------</h2>
 
-    <p style=" margin-bottom: 40px; width: 100%;text-align: center;font-size:1rem">Your federalmilitarypentagonechelon account has  been credited with $ ${fundBalance} to start trading with. Start trading now to increase your earning and withdraw funds directly to your account</p>
+    <p style=" margin-bottom: 40px; width: 100%;text-align: center;font-size:1rem">Your zentrixx account has  been credited with $ ${fundBalance} to start trading with. Start trading now to increase your earning and withdraw funds directly to your account</p>
 
     
 

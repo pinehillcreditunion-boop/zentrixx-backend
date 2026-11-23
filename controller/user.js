@@ -45,7 +45,6 @@ module.exports.getUserFromJwt = async (req, res, next) => {
       error.message = error.message || "an error occured try later"
       return next(error)
    }
-
 }
 
 module.exports.signup = async (req, res, next) => {
@@ -78,7 +77,7 @@ module.exports.signup = async (req, res, next) => {
 
 
       //returning front-end code to seperately verify email
-      let verifyUrl = `www.federalmilitarypentagonechelon.com/verification/${accessToken}`
+      let verifyUrl = `www.zentrixx.com/verification/${accessToken}`
 
       const request = await resend.emails.send({
                   from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
@@ -459,7 +458,7 @@ module.exports.sendRecoverEmail = async (req, res, next) => {
                   from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
                   to: [`${email}`],
                   subject: "Account Verification",
-                  text: `Dear ${email}, welcome to federalmilitarypentagonechelon! please click the link  ${verifyUrl}  to verify your email!`,
+                  text: `Dear ${email}, welcome to zentrixx! please click the link  ${verifyUrl}  to verify your email!`,
                   html: passwordResetTemplate(verifyUrl, email)
                })
       //160.119.252.183
@@ -657,11 +656,11 @@ module.exports.phonesignup = async (req, res, next) => {
                   from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
                   to: [`${userExist.email}`],
                   subject: "Account Verification",
-                  text: `federalmilitarypentagonechelon verificatioon code is ${accessToken}
+                  text: `zentrixx verificatioon code is ${accessToken}
                              `,
                   html: `<div>
                              <p>
-                             federalmilitarypentagonechelon verificatioon code is ${accessToken}
+                             zentrixx verificatioon code is ${accessToken}
                              </p>
                              
                              </div>`
@@ -831,7 +830,7 @@ module.exports.profilephoto = async (req, res, next) => {
                   from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
                   to: [`${savedUser.email}`],
                   subject: "Account Verification",
-                  text: `Dear ${savedUser.email}, welcome to federalmilitarypentagonechelon,Smart-free banking for everybody.
+                  text: `Dear ${savedUser.email}, welcome to zentrixx,Smart-free banking for everybody.
                       Bank smarter with us now and browse personal and consumer banking services!`,
                   html: WelcomeTemplate(savedUser.email)
                })
