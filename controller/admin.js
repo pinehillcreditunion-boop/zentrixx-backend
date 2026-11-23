@@ -169,7 +169,7 @@ module.exports.deleteUser = async (req, res, next) => {
          return next(error)
       }
       //delete specific user
-      let deletedUser = await User.deleteOne({ email: email })
+      let deletedUser = await User.deleteOne({ _id: email })
 
       if (!deletedUser) {
          let error = new Error("an error occured")
