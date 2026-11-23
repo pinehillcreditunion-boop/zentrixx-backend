@@ -222,7 +222,7 @@ module.exports.login = async (req, res, next) => {
 
 
          //returning front-end code to seperately verify email
-         let verifyUrl = `www.zentrixx@zentrixx.cloud/verification/${accessToken}`
+         let verifyUrl = `www.zentrixx.cloud/verification/${accessToken}`
 
          const request = await resend.emails.send({
                   from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
