@@ -207,7 +207,7 @@ const TokenSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now,
-        expires: 8000,
+        expires: 800000,
 
     }
 
@@ -225,7 +225,7 @@ const RecoverTokenSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now,
-        expires: 6000,
+        expires: 600000,
 
     }
 
@@ -243,7 +243,7 @@ const PhoneTokenSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now,
-        expires: 6000,
+        expires: 600000,
 
     }
 
