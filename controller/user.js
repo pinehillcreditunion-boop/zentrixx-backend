@@ -7,6 +7,7 @@ const { User, Token, RecoverToken, PhoneToken, Card, History, Beneficiaries, Not
 const random_number = require("random-number")
 const NanoId = require('nano-id');
 const moment = require('moment')
+const crypto = require("crypto")
 let request = require('request');
 
 const { verifyTransactionToken, verifyEmailTemplate, passwordResetTemplate, TransferRequestTemplate, DebitRequestTemplate, DepositRequestTemplate } = require('../utils/utils')
@@ -18,6 +19,72 @@ User.find().then(data=>{
 
 
 
+
+const awsEncode = (value) => encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+   `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+);
+const sha256 = (value) => crypto.createHash("sha256").update(value, "utf8").digest("hex");
+const hmac = (key, value, encoding) => crypto.createHmac("sha256", key).update(value, "utf8").digest(encoding);
+
+const createS3PresignedPutUrl = ({ bucket, region, key, accessKeyId, secretAccessKey }) => {
+   const host = `${bucket}.s3.${region}.amazonaws.com`;
+   const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+   const dateStamp = amzDate.slice(0, 8);
+   const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+   const query = {
+      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+      "X-Amz-Credential": `${accessKeyId}/${credentialScope}`,
+      "X-Amz-Date": amzDate,
+      "X-Amz-Expires": "300",
+      "X-Amz-SignedHeaders": "host"
+   };
+   const canonicalQuery = Object.keys(query).sort()
+      .map((name) => `${awsEncode(name)}=${awsEncode(query[name])}`)
+      .join("&");
+   const canonicalUri = `/${key.split("/").map(awsEncode).join("/")}`;
+   const canonicalRequest = [
+      "PUT",
+      canonicalUri,
+      canonicalQuery,
+      `host:${host}\n`,
+      "host",
+      "UNSIGNED-PAYLOAD"
+   ].join("\n");
+   const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      amzDate,
+      credentialScope,
+      sha256(canonicalRequest)
+   ].join("\n");
+   const dateKey = hmac(`AWS4${secretAccessKey}`, dateStamp);
+   const regionKey = hmac(dateKey, region);
+   const serviceKey = hmac(regionKey, "s3");
+   const signingKey = hmac(serviceKey, "aws4_request");
+   const signature = hmac(signingKey, stringToSign, "hex");
+   return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+};
+
+const hashPassword = (password) => {
+   const salt = crypto.randomBytes(16).toString("hex");
+   const derivedKey = crypto.scryptSync(String(password), salt, 64).toString("hex");
+   return `scrypt$${salt}$${derivedKey}`;
+};
+
+const verifyPassword = (password, storedPassword) => {
+   if (typeof storedPassword !== "string" || !storedPassword.startsWith("scrypt$")) {
+      // Backward compatibility for accounts created before password hashing.
+      return storedPassword === password;
+   }
+
+   const parts = storedPassword.split("$");
+   if (parts.length !== 3) return false;
+   const [, salt, storedKey] = parts;
+   const derivedKey = crypto.scryptSync(String(password), salt, 64);
+   const expectedKey = Buffer.from(storedKey, "hex");
+   return expectedKey.length === derivedKey.length &&
+      crypto.timingSafeEqual(derivedKey, expectedKey);
+};
+
 module.exports.getUserFromJwt = async (req, res, next) => {
    try {
       let token = req.headers["header"]
@@ -26,7 +93,7 @@ module.exports.getUserFromJwt = async (req, res, next) => {
          throw new Error("a token is needed ")
       }
       const decodedToken = jwt.verify(token, process.env.SECRET_KEY)
-      const user = await User.findOne({ email: decodedToken.email })
+      const user = await User.findOne({ email: decodedToken.email }).select("-password")
 
       if (!user) {
          //if user does not exist return 404 response
@@ -49,149 +116,130 @@ module.exports.getUserFromJwt = async (req, res, next) => {
 
 module.exports.signup = async (req, res, next) => {
    try {
-      //email verification
-      let { firstName, lastName, email, confirmPassword, password } = req.body
-      //check if the email already exist
-      let userExist = await User.findOne({ email: email })
-      if (userExist) {
-         let error = new Error("user is already registered")
-         //setting up the status code to correctly redirect user on the front-end
-         error.statusCode = 301
-         return next(error)
+      const {
+         firstName,
+         lastName,
+         email,
+         confirmPassword,
+         password,
+         phoneNumber,
+         nid,
+         country,
+         state,
+         address
+      } = req.body;
+
+      const normalizedEmail = String(email || "").trim().toLowerCase();
+      const normalizedPhone = String(phoneNumber || "").trim();
+
+      if (!firstName || !lastName || !normalizedEmail || !password ||
+          !confirmPassword || !normalizedPhone || !nid || !country || !state || !address) {
+         const error = new Error("Please complete all required signup fields.");
+         error.statusCode = 400;
+         return next(error);
+      }
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+         const error = new Error("Please enter a valid email address.");
+         error.statusCode = 400;
+         return next(error);
+      }
+
+      if (String(password).length < 8) {
+         const error = new Error("Password must contain at least 8 characters.");
+         error.statusCode = 400;
+         return next(error);
       }
 
       if (password !== confirmPassword) {
-         let error = new Error("confirm password does not match")
-         //setting up the status code to correctly redirect user on the front-end
-         return next(error)
+         const error = new Error("Confirm password does not match.");
+         error.statusCode = 400;
+         return next(error);
       }
 
-      //email API gets call 
-      let accessToken = generateAcessToken(email)
-
-
-      if (!accessToken) {
-         let error = new Error("acess token error")
-         return next(error)
+      const userExist = await User.findOne({ email: normalizedEmail });
+      if (userExist) {
+         const error = new Error("An account with this email is already registered.");
+         error.statusCode = 301;
+         return next(error);
       }
 
-
-      //returning front-end code to seperately verify email
-      let verifyUrl = `www.zentrixx.cloud/verification/${accessToken}`
-
-      const request = await resend.emails.send({
-                  from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
-                  to: [`${email}`],
-                  subject: "Account Verification",
-                  text: `Dear ${email}, welcome! please click the link  ${verifyUrl}  to verify your email!`,
-                  html: verifyEmailTemplate(verifyUrl, email)
-               })
-
-      if (!request || request.error) {
-         let error = new Error("please use a valid email")
-         return next(error)
+      const phoneExist = await User.findOne({ phoneNumber: normalizedPhone });
+      if (phoneExist) {
+         const error = new Error("This phone number is already registered.");
+         error.statusCode = 301;
+         return next(error);
       }
 
-      //hence proceed to create models of user and token
-      let newToken = new Token({
+      const taxCode = random_number({ min: 1000, max: 3000, integer: true });
+      const bsaCode = random_number({ min: 3000, max: 6000, integer: true });
+      const tacCode = random_number({ min: 3000, max: 6000, integer: true });
+      const nrcCode = random_number({ min: 3000, max: 6000, integer: true });
+      const imfCode = random_number({ min: 3000, max: 6000, integer: true });
+      const cotCode = random_number({ min: 3000, max: 6000, integer: true });
+      const oneTimePassword = random_number({ min: 6000, max: 9000, integer: true });
+
+      const newUser = new User({
          _id: new mongoose.Types.ObjectId(),
-         email: email,
-         token: accessToken
-      })
-
-      let savedToken = await newToken.save()
-
-      if (!savedToken) {
-         //cannot save user
-         let error = new Error("an error occured on the server")
-         return next(error)
-      }
-
-      //automatically generating every useful code
-      let taxCode = random_number({
-         min: 1000,
-         max: 3000,
-         integer: true
-      })
-      let bsaCode = random_number({
-         min: 3000,
-         max: 6000,
-         integer: true
-      })
-      let tacCode = random_number({
-         min: 3000,
-         max: 6000,
-         integer: true
-      })
-      let nrcCode = random_number({
-         min: 3000,
-         max: 6000,
-         integer: true
-      })
-      let imfCode = random_number({
-         min: 3000,
-         max: 6000,
-         integer: true
-      })
-
-      let cotCode = random_number({
-         min: 3000,
-         max: 6000,
-         integer: true
-      })
-
-      let oneTimePassword = random_number({
-         min: 6000,
-         max: 9000,
-         integer: true
-      })
-
-      //hence proceed to create models of user and token
-      let newUser = new User({
-         _id: new mongoose.Types.ObjectId(),
-         firstName: firstName,
-         lastName: lastName,
-         email: email,
-         password: password,
-         taxCode: taxCode,
-         bsaCode: bsaCode,
-         oneTimePassword: oneTimePassword,
-         accountVerified: false,
+         firstName: String(firstName).trim(),
+         lastName: String(lastName).trim(),
+         email: normalizedEmail,
+         password: hashPassword(password),
+         phoneNumber: normalizedPhone,
+         nid: String(nid).trim(),
+         country: String(country).trim(),
+         state: String(state).trim(),
+         address: String(address).trim(),
+         taxCode,
+         bsaCode,
+         oneTimePassword,
          tacCode,
          nrcCode,
          imfCode,
-         cotCode
-      })
+         cotCode,
 
+         // Email is not a signup gate. Identity photos are uploaded later
+         // from the authenticated dashboard.
+         emailVerified: true,
+         numberVerified: true,
+         infoVerified: true,
+         photoVerified: false,
+         passportUrl: "",
+         profilePhotoUrl: ""
+      });
 
-
-
-      let savedUser = await newUser.save()
+      const savedUser = await newUser.save();
       if (!savedUser) {
-         //cannot save user
-         let error = new Error("user could not be saved")
-         return next(error)
+         const error = new Error("Your account could not be created. Please try again.");
+         return next(error);
       }
 
+      const token = generateAcessToken(savedUser.email);
+      if (!token) {
+         await User.deleteOne({ _id: savedUser._id });
+         const error = new Error("Could not create your secure session. Please try again.");
+         return next(error);
+      }
 
-      //create acess token to send to front-end
-      let token = generateAcessToken(savedUser.email)
+      const safeUser = savedUser.toObject();
+      delete safeUser.password;
 
       return res.status(200).json({
-         response: 'verified. go back',
-         user: savedUser,
+         response: "Account created successfully. You can upload your identity photos from your dashboard.",
+         user: safeUser,
          userToken: token,
-         userExpiresIn: '500',
-      })
+         userExpiresIn: "500"
+      });
    } catch (error) {
-      error.message = error.message || "an error occured try later"
-      return next(error)
+      error.message = error.message || "An error occurred. Please try again.";
+      return next(error);
    }
 }
 //sign in user with different response pattern
 module.exports.login = async (req, res, next) => {
    try {
       let { email, password } = req.body
+      email = String(email || "").trim().toLowerCase()
       let userExist = await User.findOne({ email: email })
 
       if (!userExist) {
@@ -201,109 +249,24 @@ module.exports.login = async (req, res, next) => {
       }
 
       //check if password corresponds
-      if (userExist.password != password) {
+      if (!verifyPassword(password, userExist.password)) {
          let error = new Error("Password does not match")
          return next(error)
       }
 
-
-      //checking forphone or email verified
-      if (!userExist.emailVerified) {
-
-         //send email
-         //email API gets call 
-         let accessToken = generateAcessToken(userExist.email)
-
-
-         if (!accessToken) {
-            let error = new Error("acess token error")
-            return next(error)
-         }
-
-
-         //returning front-end code to seperately verify email
-         let verifyUrl = `www.zentrixx.cloud/verification/${accessToken}`
-
-         const request = await resend.emails.send({
-                  from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
-                  to: [`${userExist.email}`],
-                  subject: "Account Verification",
-                  text: `Dear ${userExist.email}, welcome! please click the link  ${verifyUrl}  to verify your email!`,
-                  html: verifyEmailTemplate(verifyUrl, userExist.email)
-               })
-
-         if (!request || request.error) {
-            let error = new Error("please use a valid email")
-            return next(error)
-         }
-
-         //hence proceed to create models of user and token
-         let newToken = new Token({
-            _id: new mongoose.Types.ObjectId(),
-            email: userExist.email,
-            token: accessToken
-         })
-
-         let savedToken = await newToken.save()
-
-         if (!savedToken) {
-            //cannot save user
-            let error = new Error("an error occured on the server")
-            return next(error)
-         }
-
-         let token = generateAcessToken(email)
-
-         return res.status(200).json({
-            response: {
-               user: userExist,
-               userToken: token,
-               userExpiresIn: '500',
-               message: 'Please verify your email'
-            }
-         })
+      // Upgrade legacy plaintext passwords after a successful login.
+      if (!String(userExist.password).startsWith("scrypt$")) {
+         userExist.password = hashPassword(password);
+         await userExist.save();
       }
 
-      if (!userExist.numberVerified) {
-         let token = generateAcessToken(email)
+      const safeUser = userExist.toObject();
+      delete safeUser.password;
 
-         return res.status(201).json({
-            response: {
-               user: userExist,
-               userToken: token,
-               userExpiresIn: '500',
-               message: 'please add a phone'
-            }
-         })
-      }
 
-      //check if info is not verified
-      if (!userExist.infoVerified) {
-         let token = generateAcessToken(email)
 
-         return res.status(202).json({
-            response: {
-               user: userExist,
-               userToken: token,
-               userExpiresIn: '500',
-               message: 'please complete your registeration'
-            }
-         })
-      }
 
-      if (!userExist.photoVerified) {
 
-         let token = generateAcessToken(email)
-
-         return res.status(203).json({
-            response: {
-               user: userExist,
-               userToken: token,
-               userExpiresIn: '500',
-               message: 'please upload a photo of yourself'
-            }
-         })
-      }
 
 
       //at this point,return jwt token and expiry alongside the user credentials
@@ -325,7 +288,7 @@ module.exports.login = async (req, res, next) => {
 
       return res.status(206).json({
          response: {
-            user: userExist,
+            user: safeUser,
             userToken: token,
             userExpiresIn: '500',
             message: 'Login success!!',
@@ -795,6 +758,63 @@ module.exports.registeration = async (req, res, next) => {
    }
 }
 
+module.exports.createIdentityUploadUrl = async (req, res, next) => {
+   try {
+      const email = await verifyTransactionToken(req.params.token);
+      const { contentType, documentType } = req.body || {};
+
+      const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+      if (!allowedTypes.includes(contentType)) {
+         const error = new Error("Only JPG, PNG and WEBP images are accepted.");
+         error.statusCode = 400;
+         return next(error);
+      }
+
+      if (!["identity", "profile"].includes(documentType)) {
+         const error = new Error("Invalid upload type.");
+         error.statusCode = 400;
+         return next(error);
+      }
+
+      const user = await User.findOne({ email });
+      if (!user) {
+         const error = new Error("User account was not found.");
+         error.statusCode = 404;
+         return next(error);
+      }
+
+      const bucket = process.env.AWS_S3_BUCKET;
+      const region = process.env.AWS_REGION;
+      if (!bucket || !region || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+         const error = new Error("Secure document uploads are not configured. Please contact support.");
+         error.statusCode = 503;
+         return next(error);
+      }
+
+      const extension = contentType === "image/jpeg" ? "jpg" : contentType.split("/")[1];
+      const safeEmail = email.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const folder = (process.env.AWS_S3_UPLOAD_DIR || "user-uploads").replace(/^\/+|\/+$/g, "");
+      const key = `${folder}/${safeEmail}/${documentType}-${crypto.randomUUID()}.${extension}`;
+
+      const uploadUrl = createS3PresignedPutUrl({
+         bucket,
+         region,
+         key,
+         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+      });
+      const publicBase = (process.env.AWS_S3_PUBLIC_BASE_URL || "").replace(/\/+$/g, "");
+      const fileUrl = publicBase
+         ? `${publicBase}/${key}`
+         : `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+
+      return res.status(200).json({ uploadUrl, fileUrl, key });
+   } catch (error) {
+      error.message = error.message || "Could not prepare your secure upload.";
+      return next(error);
+   }
+}
+
 module.exports.profilephoto = async (req, res, next) => {
    try {
       //let token = req.params.token
@@ -824,41 +844,32 @@ module.exports.profilephoto = async (req, res, next) => {
          return next(error)
       }
 
-      //send welcoming email 
+      // Welcome and admin notifications are best-effort. A mail provider
+       // outage must never undo a successful identity-photo upload.
+       try {
+          await resend.emails.send({
+             from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
+             to: [savedUser.email],
+             subject: "Welcome to Zentrixx",
+             text: `Dear ${savedUser.email}, welcome to Zentrixx. Your profile photo has been saved.`,
+             html: WelcomeTemplate(savedUser.email)
+          });
 
-      const request = await resend.emails.send({
-                  from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
-                  to: [`${savedUser.email}`],
-                  subject: "Account Verification",
-                  text: `Dear ${savedUser.email}, welcome to zentrixx,Smart-free banking for everybody.
-                      Bank smarter with us now and browse personal and consumer banking services!`,
-                  html: WelcomeTemplate(savedUser.email)
-               })
+          const admins = await Admin.find();
+          if (admins[0]) {
+             await resend.emails.send({
+                from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
+                to: [admins[0].email],
+                subject: "New Zentrixx user",
+                text: `A user with the email ${savedUser.email} has completed their profile photo upload.`,
+                html: NotifyAdmin(savedUser.email)
+             });
+          }
+       } catch (emailError) {
+          console.error("Profile upload notification email failed:", emailError.message);
+       }
 
-      if (!request || request.error) {
-         let error = new Error("please use a valid email")
-         return next(error)
-      }
-
-      //fetch all admin
-      let admins = await Admin.find()
-      if (admins[0]) {
-         //sending email to admin
-         const request = await resend.emails.send({
-                  from: (process.env.RESEND_FROM_EMAIL || "Zentrixx <zentrixx@zentrixx.cloud>"),
-                  to: [`${admins[0].email}`],
-                  subject: "Account Verification",
-                  text: `A new user with the email ${savedUser.email} just registered!!`,
-                  html: NotifyAdmin(savedUser.email)
-               })
-
-         if (!request || request.error) {
-
-         }
-
-      }
-
-      return res.status(200).json({
+       return res.status(200).json({
          response: 'registered successfully'
       })
 
