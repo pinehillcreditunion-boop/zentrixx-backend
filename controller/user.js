@@ -3,19 +3,18 @@ const resend = new Resend(process.env.RESEND_API_KEY || process.env.RESEND);
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken")
 const { generateAcessToken, OneTimePasswordTemplate, WelcomeTemplate, NotifyAdmin, LoanRequestTemplate, CardRequestTemplate, SenderRequestTemplate, RecieverRequestTemplate, AdminCardRequestTemplate, AdminDepositRequestTemplate, AdminDebitRequestTemplate, AdminTransferRequestTemplate, AdminLoanRequestTemplate, contactEmail } = require('../utils/utils')
-const { User, Token, RecoverToken, PhoneToken, Card, History, Beneficiaries, Notification, Account, Admin, Loan } = require("../database/databaseConfig");
+const { User,Token, RecoverToken, PhoneToken, Card, History, Beneficiaries, Notification, Account, Admin, Loan } = require("../database/databaseConfig");
 const random_number = require("random-number")
 const NanoId = require('nano-id');
 const moment = require('moment')
 const crypto = require("crypto")
 let request = require('request');
 
+
+
 const { verifyTransactionToken, verifyEmailTemplate, passwordResetTemplate, TransferRequestTemplate, DebitRequestTemplate, DepositRequestTemplate } = require('../utils/utils')
 
 
-User.find().then(data=>{
-   console.log(data)
-})
 
 
 
