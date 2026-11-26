@@ -12,7 +12,9 @@ app.use(bodyParser.json({ limit: "1mb" }))
 const { body, validationResult } = require('express-validator')
 
 //setting express to use  the session
-const allowedOrigins = (process.env.FRONTEND_ORIGINS || "http://localhost:3000,http://localhost:5173,https://zentrixx.cloud,https://www.zentrixx.cloud")
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || "http://localhost:3000,http://localhost:5173,https://zentrixx.cloud,https://www.zentrixx.cloud,https://zentrixx-admin.onrender.com")
+
+
   .split(",").map(origin => origin.trim()).filter(Boolean);
 app.use(cors({
   origin(origin, callback) {
