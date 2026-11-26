@@ -19,49 +19,10 @@ const { verifyTransactionToken, verifyEmailTemplate, passwordResetTemplate, Tran
 
 
 
-const awsEncode = (value) => encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
-   `%${char.charCodeAt(0).toString(16).toUpperCase()}`
-);
-const sha256 = (value) => crypto.createHash("sha256").update(value, "utf8").digest("hex");
-const hmac = (key, value, encoding) => crypto.createHmac("sha256", key).update(value, "utf8").digest(encoding);
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
-const createS3PresignedPutUrl = ({ bucket, region, key, accessKeyId, secretAccessKey }) => {
-   const host = `${bucket}.s3.${region}.amazonaws.com`;
-   const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-   const dateStamp = amzDate.slice(0, 8);
-   const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
-   const query = {
-      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
-      "X-Amz-Credential": `${accessKeyId}/${credentialScope}`,
-      "X-Amz-Date": amzDate,
-      "X-Amz-Expires": "300",
-      "X-Amz-SignedHeaders": "host"
-   };
-   const canonicalQuery = Object.keys(query).sort()
-      .map((name) => `${awsEncode(name)}=${awsEncode(query[name])}`)
-      .join("&");
-   const canonicalUri = `/${key.split("/").map(awsEncode).join("/")}`;
-   const canonicalRequest = [
-      "PUT",
-      canonicalUri,
-      canonicalQuery,
-      `host:${host}\n`,
-      "host",
-      "UNSIGNED-PAYLOAD"
-   ].join("\n");
-   const stringToSign = [
-      "AWS4-HMAC-SHA256",
-      amzDate,
-      credentialScope,
-      sha256(canonicalRequest)
-   ].join("\n");
-   const dateKey = hmac(`AWS4${secretAccessKey}`, dateStamp);
-   const regionKey = hmac(dateKey, region);
-   const serviceKey = hmac(regionKey, "s3");
-   const signingKey = hmac(serviceKey, "aws4_request");
-   const signature = hmac(signingKey, stringToSign, "hex");
-   return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
-};
+const s3Client = new S3Client({ region: process.env.AWS_REGION });
 
 const hashPassword = (password) => {
    const salt = crypto.randomBytes(16).toString("hex");
@@ -760,59 +721,52 @@ module.exports.registeration = async (req, res, next) => {
 module.exports.createIdentityUploadUrl = async (req, res, next) => {
    try {
       const email = await verifyTransactionToken(req.params.token);
-      const { contentType, documentType } = req.body || {};
-
+      const { contentType, documentType, fileSize } = req.body || {};
       const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
-      if (!allowedTypes.includes(contentType)) {
-         const error = new Error("Only JPG, PNG and WEBP images are accepted.");
-         error.statusCode = 400;
-         return next(error);
-      }
+      const maxFileSize = 5 * 1024 * 1024;
 
+      if (!allowedTypes.includes(contentType)) {
+         return res.status(400).json({ response: "Only JPG, PNG and WEBP images are accepted." });
+      }
       if (!["identity", "profile"].includes(documentType)) {
-         const error = new Error("Invalid upload type.");
-         error.statusCode = 400;
-         return next(error);
+         return res.status(400).json({ response: "Invalid upload type." });
+      }
+      if (fileSize != null && (!Number.isFinite(Number(fileSize)) || Number(fileSize) <= 0 || Number(fileSize) > maxFileSize)) {
+         return res.status(400).json({ response: "Images must be no larger than 5 MB." });
       }
 
       const user = await User.findOne({ email });
-      if (!user) {
-         const error = new Error("User account was not found.");
-         error.statusCode = 404;
-         return next(error);
-      }
+      if (!user) return res.status(404).json({ response: "User account was not found." });
 
       const bucket = process.env.AWS_S3_BUCKET;
       const region = process.env.AWS_REGION;
       if (!bucket || !region || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-         const error = new Error("Secure document uploads are not configured. Please contact support.");
-         error.statusCode = 503;
-         return next(error);
+         return res.status(503).json({ response: "Secure document uploads are not configured. Please contact support." });
       }
 
-      const extension = contentType === "image/jpeg" ? "jpg" : contentType.split("/")[1];
+      // Explicit environment credentials; no AWS keys are sent to the browser.
+      const signingClient = new S3Client({
+         region,
+         credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+            ...(process.env.AWS_SESSION_TOKEN ? { sessionToken: process.env.AWS_SESSION_TOKEN } : {})
+         }
+      });
+      const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[contentType];
       const safeEmail = email.replace(/[^a-zA-Z0-9._-]/g, "_");
       const folder = (process.env.AWS_S3_UPLOAD_DIR || "user-uploads").replace(/^\/+|\/+$/g, "");
       const key = `${folder}/${safeEmail}/${documentType}-${crypto.randomUUID()}.${extension}`;
-
-      const uploadUrl = createS3PresignedPutUrl({
-         bucket,
-         region,
-         key,
-         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-      });
+      const command = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType });
+      const uploadUrl = await getSignedUrl(signingClient, command, { expiresIn: 600 });
       const publicBase = (process.env.AWS_S3_PUBLIC_BASE_URL || "").replace(/\/+$/g, "");
-      const fileUrl = publicBase
-         ? `${publicBase}/${key}`
-         : `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-
-      return res.status(200).json({ uploadUrl, fileUrl, key });
+      const fileUrl = publicBase ? `${publicBase}/${key}` : `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+      return res.status(200).json({ uploadUrl, fileUrl, key, contentType, expiresIn: 600 });
    } catch (error) {
-      error.message = error.message || "Could not prepare your secure upload.";
-      return next(error);
+      console.error("Upload URL creation failed:", error.name, error.message);
+      return res.status(500).json({ response: "Could not prepare your secure upload. Please try again." });
    }
-}
+};
 
 module.exports.profilephoto = async (req, res, next) => {
    try {

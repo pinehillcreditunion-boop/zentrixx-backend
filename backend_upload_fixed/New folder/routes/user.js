@@ -13,6 +13,7 @@ let phonesignup = require("../controller/user").phonesignup
 let verifyphone = require("../controller/user").verifyphone
 let registeration = require("../controller/user").registeration
 let profilephoto = require("../controller/user").profilephoto
+let createIdentityUploadUrl = require("../controller/user").createIdentityUploadUrl
 let fetchAllAccount = require("../controller/user").fetchAllAccount
 let loan = require("../controller/user").loan
 
@@ -33,6 +34,7 @@ router.post('/phonesignup/:token',phonesignup)
 router.post('/verifyphone/:token',verifyphone)
 router.post('/registeration/:token',registeration)
 router.post('/pofilephoto/:token',profilephoto)
+router.post('/identity-upload-url/:token', createIdentityUploadUrl)
 router.get('/hascard/:token',hasCard)
 router.post('/createcard/:token',createCard)
 router.delete('/deletecard/:token/:id',deleteCard)

@@ -8,12 +8,21 @@ app.use(express.static("public"));
 app.use("/", express.static("public"));
 const cors = require("cors")
 const bodyParser = require("body-parser")
-app.use(bodyParser.json())
+app.use(bodyParser.json({ limit: "1mb" }))
 const { body, validationResult } = require('express-validator')
 
 //setting express to use  the session
-app.use(cors())
-app.use(bodyParser.json())
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || "http://localhost:3000,http://localhost:5173,https://zentrixx.cloud,https://www.zentrixx.cloud")
+  .split(",").map(origin => origin.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("Origin is not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "header", "Authorization"],
+  maxAge: 86400
+}));
 
 
 
@@ -25,11 +34,11 @@ app.use(userRoutes.router)
 
 //error handler //express error middleware
 app.use((err, req, res, next) => {
-  console.log(err.message)
-  err.statusCode = err.statusCode || 300
-  return res.status(err.statusCode).json({
-    response:err.message
-  })
+  console.error("Request error:", err.message);
+  const statusCode = err.statusCode || 500;
+  return res.status(statusCode).json({
+    response: statusCode >= 500 ? "An unexpected server error occurred." : err.message
+  });
 })
 
 app.listen(process.env.PORT || 8080, (err) => {

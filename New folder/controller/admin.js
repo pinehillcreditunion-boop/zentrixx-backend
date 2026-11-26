@@ -708,7 +708,7 @@ module.exports.credit = async (req, res, next) => {
 
       let savedAccount = await accountExist.save()
       if (!savedAccount) {
-         let error = new Error("an error occured")
+         let error = new Error("could not save account")
          return next(error)
       }
 
@@ -731,7 +731,7 @@ module.exports.credit = async (req, res, next) => {
       let savedHistory = await newTransfer.save()
 
       if (!savedHistory) {
-         let error = new Error("an error ocurred")
+         let error = new Error("could not save history")
          return next(error)
       }
 
@@ -745,6 +745,7 @@ module.exports.credit = async (req, res, next) => {
                })
       if (!request || request.error) {
          let error = new Error("an error occurred")
+         console.log(request)
          return next(error)
       }
 
