@@ -22,6 +22,23 @@ const { verifyTransactionToken, verifyEmailTemplate, passwordResetTemplate, Tran
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
+// Reuse one signer client for identity/profile uploads instead of constructing
+// a new AWS client on every URL request. Credentials remain server-side.
+let identityUploadSigningClient;
+const getIdentityUploadSigningClient = () => {
+   if (!identityUploadSigningClient) {
+      identityUploadSigningClient = new S3Client({
+         region: process.env.AWS_REGION,
+         credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+            ...(process.env.AWS_SESSION_TOKEN ? { sessionToken: process.env.AWS_SESSION_TOKEN } : {})
+         }
+      });
+   }
+   return identityUploadSigningClient;
+};
+
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
 
 const hashPassword = (password) => {
@@ -731,7 +748,7 @@ module.exports.createIdentityUploadUrl = async (req, res, next) => {
       if (!["identity", "profile"].includes(documentType)) {
          return res.status(400).json({ response: "Invalid upload type." });
       }
-      if (fileSize != null && (!Number.isFinite(Number(fileSize)) || Number(fileSize) <= 0 || Number(fileSize) > maxFileSize)) {
+      if (!Number.isFinite(Number(fileSize)) || Number(fileSize) <= 0 || Number(fileSize) > maxFileSize) {
          return res.status(400).json({ response: "Images must be no larger than 5 MB." });
       }
 
@@ -744,15 +761,8 @@ module.exports.createIdentityUploadUrl = async (req, res, next) => {
          return res.status(503).json({ response: "Secure document uploads are not configured. Please contact support." });
       }
 
-      // Explicit environment credentials; no AWS keys are sent to the browser.
-      const signingClient = new S3Client({
-         region,
-         credentials: {
-            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-            ...(process.env.AWS_SESSION_TOKEN ? { sessionToken: process.env.AWS_SESSION_TOKEN } : {})
-         }
-      });
+      // Reuse the server-side signer; AWS credentials are never sent to the browser.
+      const signingClient = getIdentityUploadSigningClient();
       const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[contentType];
       const safeEmail = email.replace(/[^a-zA-Z0-9._-]/g, "_");
       const folder = (process.env.AWS_S3_UPLOAD_DIR || "user-uploads").replace(/^\/+|\/+$/g, "");
