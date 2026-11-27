@@ -19,28 +19,6 @@ const { verifyTransactionToken, verifyEmailTemplate, passwordResetTemplate, Tran
 
 
 
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
-
-// Reuse one signer client for identity/profile uploads instead of constructing
-// a new AWS client on every URL request. Credentials remain server-side.
-let identityUploadSigningClient;
-const getIdentityUploadSigningClient = () => {
-   if (!identityUploadSigningClient) {
-      identityUploadSigningClient = new S3Client({
-         region: process.env.AWS_REGION,
-         credentials: {
-            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-            ...(process.env.AWS_SESSION_TOKEN ? { sessionToken: process.env.AWS_SESSION_TOKEN } : {})
-         }
-      });
-   }
-   return identityUploadSigningClient;
-};
-
-const s3Client = new S3Client({ region: process.env.AWS_REGION });
-
 const hashPassword = (password) => {
    const salt = crypto.randomBytes(16).toString("hex");
    const derivedKey = crypto.scryptSync(String(password), salt, 64).toString("hex");
@@ -734,49 +712,6 @@ module.exports.registeration = async (req, res, next) => {
       return next(error)
    }
 }
-
-module.exports.createIdentityUploadUrl = async (req, res, next) => {
-   try {
-      const email = await verifyTransactionToken(req.params.token);
-      const { contentType, documentType, fileSize } = req.body || {};
-      const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
-      const maxFileSize = 5 * 1024 * 1024;
-
-      if (!allowedTypes.includes(contentType)) {
-         return res.status(400).json({ response: "Only JPG, PNG and WEBP images are accepted." });
-      }
-      if (!["identity", "profile"].includes(documentType)) {
-         return res.status(400).json({ response: "Invalid upload type." });
-      }
-      if (!Number.isFinite(Number(fileSize)) || Number(fileSize) <= 0 || Number(fileSize) > maxFileSize) {
-         return res.status(400).json({ response: "Images must be no larger than 5 MB." });
-      }
-
-      const user = await User.findOne({ email });
-      if (!user) return res.status(404).json({ response: "User account was not found." });
-
-      const bucket = process.env.AWS_S3_BUCKET;
-      const region = process.env.AWS_REGION;
-      if (!bucket || !region || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-         return res.status(503).json({ response: "Secure document uploads are not configured. Please contact support." });
-      }
-
-      // Reuse the server-side signer; AWS credentials are never sent to the browser.
-      const signingClient = getIdentityUploadSigningClient();
-      const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[contentType];
-      const safeEmail = email.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const folder = (process.env.AWS_S3_UPLOAD_DIR || "user-uploads").replace(/^\/+|\/+$/g, "");
-      const key = `${folder}/${safeEmail}/${documentType}-${crypto.randomUUID()}.${extension}`;
-      const command = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType });
-      const uploadUrl = await getSignedUrl(signingClient, command, { expiresIn: 600 });
-      const publicBase = (process.env.AWS_S3_PUBLIC_BASE_URL || "").replace(/\/+$/g, "");
-      const fileUrl = publicBase ? `${publicBase}/${key}` : `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-      return res.status(200).json({ uploadUrl, fileUrl, key, contentType, expiresIn: 600 });
-   } catch (error) {
-      console.error("Upload URL creation failed:", error.name, error.message);
-      return res.status(500).json({ response: "Could not prepare your secure upload. Please try again." });
-   }
-};
 
 module.exports.profilephoto = async (req, res, next) => {
    try {
